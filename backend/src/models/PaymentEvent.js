@@ -28,6 +28,6 @@ const paymentEventSchema = new mongoose.Schema({
   timestamps: false
 });
 
-const { getSecurityConnection } = require('../config/db');
-module.exports = getSecurityConnection().model('PaymentEvent', paymentEventSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('PaymentEvent', paymentEventSchema);
 

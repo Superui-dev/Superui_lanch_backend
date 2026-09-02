@@ -22,6 +22,26 @@ async function getNextSequenceValue(modelName) {
 }
 
 /**
+ * Year-scoped sequence. Resets every calendar year.
+ * Uses atomic findOneAndUpdate keyed on `${prefix}_${year}` so two services
+ * cannot generate the same Product ID concurrently.
+ */
+async function getYearlySequenceValue(prefix, year) {
+  const modelName = `${prefix}_${year}`;
+  try {
+    const counter = await Counter.findOneAndUpdate(
+      { modelName },
+      { $inc: { sequenceValue: 1 } },
+      { new: true, upsert: true }
+    );
+    return counter.sequenceValue;
+  } catch (error) {
+    logger.error(`Error incrementing yearly sequence value for ${modelName}: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
  * Generates a custom human-readable, sequential identifier.
  * Patterns:
  * - Customer: CUS-YYYY-XXXXX
@@ -51,6 +71,11 @@ async function generateCustomId(type) {
       return `DEL-${year}-${String(sequence).padStart(5, '0')}`;
     case 'product':
       return `PROD-${String(sequence).padStart(5, '0')}`;
+    case 'product_sup': {
+      const productYear = new Date().getFullYear();
+      const productSeq = await getYearlySequenceValue('product_sup', productYear);
+      return `SUP-${productYear}-${String(productSeq).padStart(6, '0')}`;
+    }
     case 'invoice':
       return `INV-${year}-${String(sequence).padStart(6, '0')}`;
     case 'download':

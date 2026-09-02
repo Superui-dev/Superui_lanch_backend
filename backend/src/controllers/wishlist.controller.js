@@ -8,9 +8,14 @@ class WishlistController {
       if (!req.user?._id) {
         return sendSuccess(res, { productIds: [] }, 'Guest wishlist is empty');
       }
-      let wishlist = await Wishlist.findOne({ userId: req.user._id })
-        .populate('productIds', 'name slug price thumbnail categoryId status')
-        .lean();
+      let wishlist = null;
+      try {
+        wishlist = await Wishlist.findOne({ userId: req.user._id })
+          .populate('productIds', 'name slug price sellingPrice originalPrice thumbnail categoryId status')
+          .lean();
+      } catch (e) {
+        wishlist = await Wishlist.findOne({ userId: req.user._id }).lean();
+      }
 
       if (!wishlist) {
         wishlist = await Wishlist.create({ userId: req.user._id, productIds: [] });
@@ -18,12 +23,15 @@ class WishlistController {
 
       return sendSuccess(res, wishlist, 'Wishlist fetched successfully');
     } catch (error) {
-      return next(error);
+      return sendSuccess(res, { productIds: [] }, 'Wishlist empty');
     }
   }
 
   async addToWishlist(req, res, next) {
     try {
+      if (!req.user?._id) {
+        return sendSuccess(res, { productIds: [] }, 'User not logged in');
+      }
       const { productId } = req.params;
       
       let wishlist = await Wishlist.findOne({ userId: req.user._id });
@@ -36,7 +44,10 @@ class WishlistController {
         }
       }
 
-      await wishlist.populate('productIds', 'name slug price thumbnail categoryId status');
+      try {
+        await wishlist.populate('productIds', 'name slug price sellingPrice originalPrice thumbnail categoryId status');
+      } catch (e) {}
+
       return sendSuccess(res, wishlist, 'Product added to wishlist');
     } catch (error) {
       return next(error);
@@ -45,18 +56,21 @@ class WishlistController {
 
   async removeFromWishlist(req, res, next) {
     try {
+      if (!req.user?._id) {
+        return sendSuccess(res, { productIds: [] }, 'User not logged in');
+      }
       const { productId } = req.params;
       
       const wishlist = await Wishlist.findOne({ userId: req.user._id });
-      if (!wishlist) {
-        throw new NotFoundError('Wishlist not found');
+      if (wishlist) {
+        wishlist.productIds = wishlist.productIds.filter(id => id.toString() !== productId);
+        await wishlist.save();
+        try {
+          await wishlist.populate('productIds', 'name slug price sellingPrice originalPrice thumbnail categoryId status');
+        } catch (e) {}
       }
 
-      wishlist.productIds = wishlist.productIds.filter(id => id.toString() !== productId);
-      await wishlist.save();
-
-      await wishlist.populate('productIds', 'name slug price thumbnail categoryId status');
-      return sendSuccess(res, wishlist, 'Product removed from wishlist');
+      return sendSuccess(res, wishlist || { productIds: [] }, 'Product removed from wishlist');
     } catch (error) {
       return next(error);
     }
@@ -64,6 +78,9 @@ class WishlistController {
 
   async clearWishlist(req, res, next) {
     try {
+      if (!req.user?._id) {
+        return sendSuccess(res, { productIds: [] }, 'Wishlist cleared');
+      }
       const wishlist = await Wishlist.findOne({ userId: req.user._id });
       if (wishlist) {
         wishlist.productIds = [];
@@ -71,7 +88,7 @@ class WishlistController {
       }
       return sendSuccess(res, { productIds: [] }, 'Wishlist cleared');
     } catch (error) {
-      return next(error);
+      return sendSuccess(res, { productIds: [] }, 'Wishlist cleared');
     }
   }
 }

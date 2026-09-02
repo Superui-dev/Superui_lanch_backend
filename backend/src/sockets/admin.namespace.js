@@ -12,12 +12,12 @@ function initAdminNamespace(io) {
     activeConnections++;
     logger.info(`Admin user connected to WS dashboard. Total connections: ${activeConnections}`);
 
-    adminNs.emit(events.ADMIN_VISITOR_LIVE_COUNT, { liveAdmins: activeConnections });
+    adminNs.emit(events.ADMIN_VISITOR_LIVE_COUNT, { liveAdmins: activeConnections, count: activeConnections });
 
     socket.on(events.DISCONNECT, () => {
       activeConnections = Math.max(0, activeConnections - 1);
       logger.info(`Admin user disconnected from WS dashboard. Total connections: ${activeConnections}`);
-      adminNs.emit(events.ADMIN_VISITOR_LIVE_COUNT, { liveAdmins: activeConnections });
+      adminNs.emit(events.ADMIN_VISITOR_LIVE_COUNT, { liveAdmins: activeConnections, count: activeConnections });
     });
   });
 

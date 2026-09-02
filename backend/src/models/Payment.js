@@ -74,6 +74,6 @@ paymentSchema.pre('validate', async function(next) {
   next();
 });
 
-const { getUsersConnection } = require('../config/db');
-module.exports = getUsersConnection().model('Payment', paymentSchema);
+const { getCommerceConnection } = require('../config/db');
+module.exports = getCommerceConnection().model('Payment', paymentSchema);
 

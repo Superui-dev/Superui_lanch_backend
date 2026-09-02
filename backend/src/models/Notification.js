@@ -30,6 +30,6 @@ const notificationSchema = new mongoose.Schema({
   timestamps: { createdAt: true, updatedAt: true }
 });
 
-const { getMessagingConnection } = require('../config/db');
-module.exports = getMessagingConnection().model('Notification', notificationSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('Notification', notificationSchema);
 

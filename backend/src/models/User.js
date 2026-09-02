@@ -55,6 +55,12 @@ const userSchema = new mongoose.Schema({
     index: true
   },
   mfaEnabled: { type: Boolean, default: false },
+  mfaSecret: {
+    type: String,
+    select: false,
+    trim: true
+  },
+  mfaEnrolledAt: { type: Date },
   status: { 
     type: String, 
     enum: ['active', 'inactive', 'disabled', 'blocked'], 
@@ -82,9 +88,6 @@ userSchema.pre('validate', async function(next) {
   next();
 });
 
-const { getCoreConnection, getUsersConnection } = require('../config/db');
-const UserModel = getCoreConnection().model('User', userSchema);
-try {
-  getUsersConnection().model('User', userSchema);
-} catch (e) {}
+const { getCommerceConnection } = require('../config/db');
+const UserModel = getCommerceConnection().model('User', userSchema);
 module.exports = UserModel;

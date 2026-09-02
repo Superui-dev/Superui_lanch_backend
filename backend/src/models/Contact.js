@@ -31,5 +31,5 @@ const contactSchema = new mongoose.Schema({
   timestamps: { createdAt: true, updatedAt: true }
 });
 
-const { getMessagingConnection } = require('../config/db');
-module.exports = getMessagingConnection().model('Contact', contactSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('Contact', contactSchema);

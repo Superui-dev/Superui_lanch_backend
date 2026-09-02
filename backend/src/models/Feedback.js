@@ -53,5 +53,5 @@ const feedbackSchema = new mongoose.Schema(
   }
 );
 
-const { getPromotionsConnection } = require('../config/db');
-module.exports = getPromotionsConnection().model('Feedback', feedbackSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('Feedback', feedbackSchema);

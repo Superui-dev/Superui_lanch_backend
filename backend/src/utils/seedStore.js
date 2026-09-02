@@ -5,7 +5,7 @@ const Product = require('../models/Product');
 
 const seedStore = async () => {
   try {
-    const coreUri = process.env.MONGODB_URI_CORE || process.env.MONGODB_URI || 'mongodb://localhost:27017/superui_core';
+    const coreUri = process.env.MONGO_DB_1_URI || process.env.MONGODB_URI_CORE || process.env.MONGODB_URI || 'mongodb://localhost:27017/superui_db1_catalog';
     console.log('Connecting to MongoDB Core:', coreUri);
     await mongoose.connect(coreUri);
 
@@ -241,7 +241,12 @@ const seedStore = async () => {
       }
     ];
 
-    await Product.create(productsData);
+    const normalized = productsData.map(p => ({
+      ...p,
+      sellingPrice: p.price,
+      originalPrice: p.compareAtPrice || p.price
+    }));
+    await Product.create(normalized);
 
     console.log('Store database successfully seeded with 6 Categories and 18 Published Products!');
     process.exit(0);

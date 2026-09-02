@@ -75,7 +75,7 @@ class PaymentController {
         productId: item.productId,
         productName: item.name,
         quantity: item.quantity,
-        actualPrice: item.compareAtPrice || item.price,
+        actualPrice: item.compareAtPrice,
         sellingPrice: item.price,
         discountAmount: 0,
         subtotal: item.subtotal

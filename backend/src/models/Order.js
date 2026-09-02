@@ -101,5 +101,5 @@ orderSchema.pre('validate', async function(next) {
   next();
 });
 
-const { getUsersConnection } = require('../config/db');
-module.exports = getUsersConnection().model('Order', orderSchema);
+const { getCommerceConnection } = require('../config/db');
+module.exports = getCommerceConnection().model('Order', orderSchema);

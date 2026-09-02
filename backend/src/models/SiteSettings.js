@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { getCoreConnection } = require('../config/db');
+const { getCatalogDb1Connection } = require('../config/db');
 
 const menuItemSchema = new mongoose.Schema({
   label: { type: String, required: true },
@@ -92,7 +92,7 @@ const siteSettingsSchema = new mongoose.Schema({
   timestamps: { createdAt: false, updatedAt: true }
 });
 
-const coreConnection = getCoreConnection();
+const coreConnection = getCatalogDb1Connection();
 const SiteSettings = coreConnection.model('SiteSettings', siteSettingsSchema);
 
 module.exports = SiteSettings;

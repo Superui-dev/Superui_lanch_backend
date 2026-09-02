@@ -4,7 +4,7 @@ const Feedback = require('../models/Feedback');
 
 const seedFeedback = async () => {
   try {
-    const coreUri = process.env.MONGODB_URI_CORE || process.env.MONGODB_URI || 'mongodb://localhost:27017/superui_core';
+    const coreUri = process.env.MONGO_DB_1_URI || process.env.MONGODB_URI_CORE || process.env.MONGODB_URI || 'mongodb://localhost:27017/superui_db1_catalog';
     console.log('Connecting to MongoDB Core:', coreUri);
     await mongoose.connect(coreUri);
 

@@ -13,11 +13,11 @@ const counterSchema = new mongoose.Schema({
   }
 });
 
-const { getCoreConnection, getUsersConnection } = require('../config/db');
+const { getCatalogDb1Connection, getCommerceConnection } = require('../config/db');
 
-const CounterModel = getCoreConnection().model('Counter', counterSchema);
+const CounterModel = getCatalogDb1Connection().model('Counter', counterSchema);
 try {
-  getUsersConnection().model('Counter', counterSchema);
+  getCommerceConnection().model('Counter', counterSchema);
 } catch (e) {}
 
 module.exports = CounterModel;

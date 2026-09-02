@@ -12,6 +12,7 @@ const EmailLog = require('../models/EmailLog');
 const AdminLog = require('../models/AdminLog');
 const Review = require('../models/Review');
 const SiteSettings = require('../models/SiteSettings');
+const Testimonial = require('../models/Testimonial');
 const PageView = require('../models/PageView');
 const Visitor = require('../models/Visitor');
 const HeroImage = require('../models/HeroImage');
@@ -24,42 +25,189 @@ class AdminController {
   // ==========================================
   // PRODUCTS ADMIN CRUD
   // ==========================================
+
+  // List ALL products for admin regardless of status (published, draft, archived)
+  async listAdminProducts(req, res, next) {
+    try {
+      const { status, limit = 200, page = 1 } = req.query;
+      const query = {};
+      if (status && status !== 'all') {
+        query.status = status;
+      }
+      const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
+      const products = await Product.primary
+        .find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit, 10))
+        .lean();
+
+      const total = await Product.primary.countDocuments(query);
+      const counts = await Promise.all([
+        Product.primary.countDocuments({ status: 'published' }),
+        Product.primary.countDocuments({ status: 'draft' }),
+        Product.primary.countDocuments({ status: 'archived' })
+      ]);
+
+      return sendSuccess(res, {
+        products,
+        total,
+        statusCounts: {
+          published: counts[0],
+          draft: counts[1],
+          archived: counts[2],
+          all: total
+        }
+      }, 'Admin products fetched successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async createProduct(req, res, next) {
     try {
       const mongoose = require('mongoose');
+      const { ProductImage, ProductTechStack, ProductFeature } = require('../models/ProductSubCollections');
+
       let categoryId = req.body.categoryId;
       if (!categoryId && req.body.category) {
+        const catInput = String(req.body.category).trim();
+        const catSlug = catInput.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
         let cat = await Category.findOne({
           $or: [
-            { slug: req.body.category },
-            { name: new RegExp('^' + req.body.category + '$', 'i') }
+            { slug: catSlug },
+            { name: new RegExp('^' + catInput + '$', 'i') }
           ]
         });
-        if (!cat && mongoose.isValidObjectId(req.body.category)) {
-          cat = await Category.findById(req.body.category);
-        }
         if (!cat) {
+          const catName = catInput.charAt(0).toUpperCase() + catInput.slice(1);
           cat = await Category.create({
-            name: req.body.category.charAt(0).toUpperCase() + req.body.category.slice(1),
-            slug: req.body.category.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, ''),
-            visible: true
+            name: catName,
+            slug: catSlug || `cat-${Date.now()}`,
+            description: `${catName} category`
           });
         }
         categoryId = cat._id;
       }
-
-      const payload = {
-        ...req.body,
-        status: req.body.status || 'published',
-        categoryId: categoryId || req.body.categoryId,
-        createdBy: req.user?._id
-      };
-
-      const product = await Product.create(payload);
-      if (req.logAudit) {
-        await req.logAudit('CREATE_PRODUCT', 'Product', product._id, { name: product.name });
+      if (!categoryId) {
+        let defaultCat = await Category.findOne({});
+        if (!defaultCat) {
+          defaultCat = await Category.create({ name: 'General', slug: 'general', description: 'General Assets' });
+        }
+        categoryId = defaultCat._id;
       }
-      return sendSuccess(res, product, 'Product created and published successfully', 201);
+
+      const {
+        name,
+        shortDescription,
+        description,
+        sellingPrice,
+        originalPrice,
+        currency,
+        saleBadge,
+        fileType,
+        isActive,
+        thumbnail,
+        images,
+        techStack,
+        features,
+        highlights,
+        whatsIncluded,
+        liveUrl,
+        demoUrl,
+        status,
+        version,
+        featured,
+        tags,
+        metaTitle,
+        metaDescription
+      } = req.body;
+
+      if (!name || typeof name !== 'string' || !name.trim()) {
+        throw new BadRequestError('Product name is required');
+      }
+      const rawOp = req.body.originalPrice !== undefined ? req.body.originalPrice : (req.body.compareAtPrice !== undefined ? req.body.compareAtPrice : req.body.price);
+      const rawSp = req.body.sellingPrice !== undefined ? req.body.sellingPrice : (req.body.salePrice !== undefined ? req.body.salePrice : req.body.price);
+
+      if (rawOp === undefined && rawSp === undefined) {
+        throw new BadRequestError('Both originalPrice and sellingPrice are required');
+      }
+
+      let op = Number(rawOp !== undefined ? rawOp : rawSp);
+      let sp = Number(rawSp !== undefined ? rawSp : rawOp);
+
+      if (Number.isNaN(op) || Number.isNaN(sp) || op < 0 || sp < 0) {
+        throw new BadRequestError('Prices must be non-negative numbers');
+      }
+      if (op > 0 && sp > op) {
+        op = sp;
+      }
+      if (!thumbnail || !thumbnail.url) {
+        throw new BadRequestError('Product thumbnail URL is required');
+      }
+
+      const product = await Product.create({
+        name: name.trim(),
+        shortDescription: (shortDescription || '').trim(),
+        description: description || '',
+        originalPrice: op,
+        sellingPrice: sp,
+        currency: (currency || 'INR').toUpperCase(),
+        saleBadge: saleBadge || '',
+        fileType: fileType || 'template',
+        isActive: isActive !== false,
+        categoryId,
+        thumbnail: { url: thumbnail.url, key: thumbnail.key || '', alt: thumbnail.alt || name },
+        status: status || 'draft',
+        version: version || '1.0.0',
+        featured: !!featured,
+        tags: Array.isArray(tags) ? tags : [],
+        metaTitle: metaTitle || '',
+        metaDescription: metaDescription || '',
+        liveUrl: liveUrl || '',
+        demoUrl: demoUrl || '',
+        highlights: Array.isArray(highlights) ? highlights : [],
+        whatsIncluded: Array.isArray(whatsIncluded) ? whatsIncluded : [],
+        createdBy: req.user?._id
+      });
+
+      if (Array.isArray(images) && images.length > 0) {
+        const imageDocs = images.slice(0, 5).map((img, idx) => ({
+          url: typeof img === 'string' ? img : img.url,
+          key: img.key || '',
+          alt: img.alt || '',
+          sortOrder: idx
+        }));
+        await ProductImage.replaceForProduct(product._id, imageDocs);
+      }
+
+      if (Array.isArray(techStack) && techStack.length > 0) {
+        const techDocs = techStack.map((t, idx) => ({
+          name: t.name,
+          icon: t.icon || '',
+          color: t.color || '#6B7280',
+          version: t.version || '',
+          sortOrder: idx
+        }));
+        await ProductTechStack.replaceForProduct(product._id, techDocs);
+      }
+
+      if (Array.isArray(features) && features.length > 0) {
+        const featureDocs = features.map((f, idx) => ({
+          title: typeof f === 'string' ? f : f.title,
+          description: typeof f === 'string' ? '' : (f.description || ''),
+          sortOrder: idx
+        }));
+        await ProductFeature.replaceForProduct(product._id, featureDocs);
+      }
+
+      if (req.logAudit) {
+        req.logAudit('CREATE_PRODUCT', 'Product', product._id, {
+          productId: product.productId,
+          name: product.name
+        }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
+      }
+      return sendSuccess(res, product, 'Product created successfully', 201);
     } catch (error) {
       return next(error);
     }
@@ -67,12 +215,80 @@ class AdminController {
 
   async updateProduct(req, res, next) {
     try {
+      const { ProductImage, ProductTechStack, ProductFeature } = require('../models/ProductSubCollections');
       const { id } = req.params;
-      const product = await Product.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });
+      const product = await Product.findById(id);
       if (!product) throw new NotFoundError('Product not found');
-      
+
+      const forbidden = ['productId', 'slug', '_id', 'createdAt'];
+      for (const key of forbidden) {
+        if (req.body[key] !== undefined && req.body[key] !== product[key]) {
+          throw new BadRequestError(`${key} is immutable and cannot be changed`);
+        }
+      }
+
+      const updatable = {};
+      const allowed = [
+        'name', 'shortDescription', 'description', 'originalPrice', 'sellingPrice',
+        'currency', 'saleBadge', 'fileType', 'isActive', 'categoryId',
+        'thumbnail', 'status', 'version', 'featured', 'tags', 'metaTitle',
+        'metaDescription', 'liveUrl', 'demoUrl', 'highlights', 'whatsIncluded',
+        'archivedReason'
+      ];
+      for (const key of allowed) {
+        if (req.body[key] !== undefined) updatable[key] = req.body[key];
+      }
+
+      let op = updatable.originalPrice !== undefined ? Number(updatable.originalPrice) : (req.body.compareAtPrice !== undefined ? Number(req.body.compareAtPrice) : undefined);
+      let sp = updatable.sellingPrice !== undefined ? Number(updatable.sellingPrice) : (req.body.price !== undefined ? Number(req.body.price) : undefined);
+
+      if (op !== undefined) updatable.originalPrice = op;
+      if (sp !== undefined) updatable.sellingPrice = sp;
+
+      const currentOp = updatable.originalPrice !== undefined ? updatable.originalPrice : product.originalPrice;
+      const currentSp = updatable.sellingPrice !== undefined ? updatable.sellingPrice : product.sellingPrice;
+
+      if (currentOp > 0 && currentSp > currentOp) {
+        updatable.originalPrice = currentSp;
+      }
+      updatable.updatedBy = req.user?._id;
+
+      Object.assign(product, updatable);
+      await product.save();
+
+      if (Array.isArray(req.body.images)) {
+        const docs = req.body.images.slice(0, 5).map((img, idx) => ({
+          url: typeof img === 'string' ? img : img.url,
+          key: img.key || '',
+          alt: img.alt || '',
+          sortOrder: idx
+        }));
+        await ProductImage.replaceForProduct(product._id, docs);
+      }
+      if (Array.isArray(req.body.techStack)) {
+        const docs = req.body.techStack.map((t, idx) => ({
+          name: t.name,
+          icon: t.icon || '',
+          color: t.color || '#6B7280',
+          version: t.version || '',
+          sortOrder: idx
+        }));
+        await ProductTechStack.replaceForProduct(product._id, docs);
+      }
+      if (Array.isArray(req.body.features)) {
+        const docs = req.body.features.map((f, idx) => ({
+          title: typeof f === 'string' ? f : f.title,
+          description: typeof f === 'string' ? '' : (f.description || ''),
+          sortOrder: idx
+        }));
+        await ProductFeature.replaceForProduct(product._id, docs);
+      }
+
       if (req.logAudit) {
-        await req.logAudit('UPDATE_PRODUCT', 'Product', product._id, { name: product.name });
+        req.logAudit('UPDATE_PRODUCT', 'Product', product._id, {
+          productId: product.productId,
+          name: product.name
+        }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, product, 'Product updated successfully');
     } catch (error) {
@@ -82,14 +298,35 @@ class AdminController {
 
   async deleteProduct(req, res, next) {
     try {
+      const { ProductImage, ProductTechStack, ProductFeature } = require('../models/ProductSubCollections');
       const { id } = req.params;
-      const product = await Product.findByIdAndDelete(id);
+      const product = await Product.findById(id);
       if (!product) throw new NotFoundError('Product not found');
 
-      if (req.logAudit) {
-        await req.logAudit('DELETE_PRODUCT', 'Product', product._id, { name: product.name });
+      if (product.status === 'archived') {
+        await ProductImage.replaceForProduct(product._id, []);
+        await ProductTechStack.replaceForProduct(product._id, []);
+        await ProductFeature.replaceForProduct(product._id, []);
+        await Product.deleteOne({ _id: product._id });
+        if (req.logAudit) {
+          req.logAudit('DELETE_PRODUCT', 'Product', id, { productId: product.productId, hardDelete: true }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
+        }
+        return sendSuccess(res, null, 'Product permanently deleted');
       }
-      return sendSuccess(res, null, 'Product deleted successfully');
+
+      product.status = 'archived';
+      product.archivedAt = new Date();
+      product.archivedReason = req.body?.reason || 'Archived from admin panel';
+      product.updatedBy = req.user?._id;
+      await product.save();
+
+      if (req.logAudit) {
+        req.logAudit('ARCHIVE_PRODUCT', 'Product', product._id, {
+          productId: product.productId,
+          reason: product.archivedReason
+        }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
+      }
+      return sendSuccess(res, product, 'Product archived. The productId cannot be reassigned.');
     } catch (error) {
       return next(error);
     }
@@ -215,7 +452,7 @@ class AdminController {
       if (!customer) throw new NotFoundError('Customer not found');
 
       if (req.logAudit) {
-        await req.logAudit('CHANGE_USER_ROLE', 'User', customer._id, { email: customer.email, status });
+        req.logAudit('CHANGE_USER_ROLE', 'User', customer._id, { email: customer.email, status }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, customer, `Customer status updated to ${status}`);
     } catch (error) {
@@ -250,7 +487,7 @@ class AdminController {
       await DownloadToken.updateMany({ orderId: order._id }, { revokedAt: new Date() });
 
       if (req.logAudit) {
-        await req.logAudit('REFUND_ORDER', 'Order', order._id, { action: 'CANCEL' });
+        req.logAudit('REFUND_ORDER', 'Order', order._id, { action: 'CANCEL' }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
 
       return sendSuccess(res, order, 'Order cancelled successfully');
@@ -440,7 +677,7 @@ class AdminController {
       if (!token) throw new NotFoundError('Token not found');
 
       if (req.logAudit) {
-        await req.logAudit('REVOKE_DOWNLOAD', 'DownloadToken', token._id, { orderId: token.orderId });
+        req.logAudit('REVOKE_DOWNLOAD', 'DownloadToken', token._id, { orderId: token.orderId }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, token, 'Download link access revoked successfully');
     } catch (error) {
@@ -489,21 +726,30 @@ class AdminController {
 
       const logs = await EmailLog.find()
         .sort({ createdAt: -1 })
-        .limit(100)
+        .limit(200)
         .lean();
 
-      for (const log of logs) {
-        if (log.relatedOrderId && mongoose.Types.ObjectId.isValid(log.relatedOrderId)) {
+      const populatedLogs = await Promise.all(logs.map(async (log) => {
+        const orderIdToLookup = log.relatedOrderId || log.orderId;
+        if (orderIdToLookup && mongoose.Types.ObjectId.isValid(orderIdToLookup)) {
           try {
-            const ord = await Order.findById(log.relatedOrderId).select('orderNumber').lean();
-            if (ord) log.relatedOrderId = ord;
+            const ord = await Order.read.findById(orderIdToLookup);
+            if (ord) {
+              return {
+                ...log,
+                orderNumber: ord.orderNumber,
+                relatedOrderNumber: ord.orderNumber,
+                relatedOrderId: typeof log.relatedOrderId === 'object' ? log.relatedOrderId : { _id: ord._id, orderNumber: ord.orderNumber }
+              };
+            }
           } catch (e) {}
         }
-      }
+        return log;
+      }));
 
-      return sendSuccess(res, logs, 'Email logs fetched');
+      return sendSuccess(res, populatedLogs, 'Email logs fetched successfully');
     } catch (error) {
-      return next(error);
+      return sendSuccess(res, [], 'Email logs fetched (empty fallback)');
     }
   }
 
@@ -737,7 +983,7 @@ class AdminController {
       );
       
       if (req.logAudit) {
-        await req.logAudit('UPDATE_SITE_SETTINGS', 'SiteSettings', null, { settingsId: 'site_settings' });
+        req.logAudit('UPDATE_SITE_SETTINGS', 'SiteSettings', null, { settingsId: 'site_settings' }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, settings, 'Site settings updated successfully');
     } catch (error) {
@@ -893,7 +1139,7 @@ class AdminController {
     try {
       const image = await HeroImage.create(req.body);
       if (req.logAudit) {
-        await req.logAudit('CREATE_HERO_IMAGE', 'HeroImage', image._id, { title: image.title });
+        req.logAudit('CREATE_HERO_IMAGE', 'HeroImage', image._id, { title: image.title }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, image, 'Hero image created successfully', 201);
     } catch (error) {
@@ -908,7 +1154,7 @@ class AdminController {
       if (!image) throw new NotFoundError('Hero image not found');
 
       if (req.logAudit) {
-        await req.logAudit('UPDATE_HERO_IMAGE', 'HeroImage', image._id, { title: image.title });
+        req.logAudit('UPDATE_HERO_IMAGE', 'HeroImage', image._id, { title: image.title }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, image, 'Hero image updated successfully');
     } catch (error) {
@@ -923,7 +1169,7 @@ class AdminController {
       if (!image) throw new NotFoundError('Hero image not found');
 
       if (req.logAudit) {
-        await req.logAudit('DELETE_HERO_IMAGE', 'HeroImage', id, { title: image.title });
+        req.logAudit('DELETE_HERO_IMAGE', 'HeroImage', id, { title: image.title }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, null, 'Hero image deleted successfully');
     } catch (error) {
@@ -935,6 +1181,126 @@ class AdminController {
     try {
       const data = await healthService.getIntegrationsDashboard();
       return sendSuccess(res, data, 'Integrations dashboard retrieved successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  // ==========================================
+  // TESTIMONIALS ADMIN CRUD
+  // ==========================================
+  async getTestimonials(req, res, next) {
+    try {
+      const testimonials = await Testimonial.find().sort({ order: 1, createdAt: -1 }).lean();
+      return sendSuccess(res, testimonials, 'All testimonials retrieved');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async createTestimonial(req, res, next) {
+    try {
+      const testimonial = await Testimonial.create(req.body);
+      return sendSuccess(res, testimonial, 'Testimonial created successfully', 201);
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async updateTestimonial(req, res, next) {
+    try {
+      const { id } = req.params;
+      const testimonial = await Testimonial.findByIdAndUpdate(id, req.body, { new: true, runValidators: true });
+      if (!testimonial) throw new NotFoundError('Testimonial not found');
+      return sendSuccess(res, testimonial, 'Testimonial updated successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async deleteTestimonial(req, res, next) {
+    try {
+      const { id } = req.params;
+      const testimonial = await Testimonial.findByIdAndDelete(id);
+      if (!testimonial) throw new NotFoundError('Testimonial not found');
+      return sendSuccess(res, null, 'Testimonial deleted successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  // ==========================================
+  // PAGE CONFIGURATION PANEL (JSON FORMAT)
+  // ==========================================
+  async getPageConfig(req, res, next) {
+    try {
+      let settings = await SiteSettings.findById('site_settings').lean();
+      if (!settings) {
+        settings = {
+          branding: { logoText: 'SuperUI', logoSubText: '' },
+          navbar: { menuItems: [{ label: 'Home', url: '/' }, { label: 'Products', url: '/products' }, { label: 'Portfolio', url: '/portfolio' }, { label: 'Contact', url: '/contact' }] },
+          footer: { copyright: `© ${new Date().getFullYear()} SuperUI. All rights reserved.` },
+          hero: { headline: 'Build Fast With Production-Ready Digital Assets', badgeText: 'SuperUI 2.0 Engine Released' },
+          pricing: { sectionTitle: 'Pricing with No additional dev cost' }
+        };
+      }
+
+      const testimonials = await Testimonial.find().lean();
+      const pageConfigJson = {
+        _id: settings._id || 'site_settings',
+        branding: settings.branding || {},
+        navbar: settings.navbar || {},
+        footer: settings.footer || {},
+        hero: settings.hero || {},
+        pricing: settings.pricing || {},
+        contact: settings.contact || {},
+        socialLinks: settings.socialLinks || {},
+        seo: settings.seo || {},
+        testimonials: testimonials || []
+      };
+
+      return sendSuccess(res, pageConfigJson, 'Page configuration JSON retrieved');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async updatePageConfig(req, res, next) {
+    try {
+      let incomingConfig = req.body;
+      if (req.body.config && typeof req.body.config === 'object') {
+        incomingConfig = req.body.config;
+      } else if (typeof req.body.jsonString === 'string') {
+        try {
+          incomingConfig = JSON.parse(req.body.jsonString);
+        } catch (jsonErr) {
+          throw new BadRequestError('Invalid JSON format: ' + jsonErr.message);
+        }
+      }
+
+      const { testimonials, ...settingsPayload } = incomingConfig;
+
+      const updatedSettings = await SiteSettings.findByIdAndUpdate(
+        'site_settings',
+        settingsPayload,
+        { new: true, upsert: true, runValidators: false }
+      );
+
+      if (Array.isArray(testimonials)) {
+        await Testimonial.deleteMany({});
+        if (testimonials.length > 0) {
+          await Testimonial.insertMany(testimonials.map(t => ({
+            name: t.name || 'Anonymous',
+            role: t.role || 'User',
+            text: t.text || '',
+            initials: t.initials || (t.name ? t.name.substring(0, 2).toUpperCase() : 'U'),
+            rating: t.rating || 5,
+            visible: t.visible !== false
+          })));
+        }
+      }
+
+      return sendSuccess(res, updatedSettings, 'Page configuration updated successfully from JSON');
     } catch (error) {
       return next(error);
     }

@@ -24,12 +24,9 @@ const adminLogSchema = new mongoose.Schema({
   timestamps: false
 });
 
-const { getCoreConnection, getSecurityConnection } = require('../config/db');
+const { getOperationsConnection } = require('../config/db');
 
-const AdminLogModel = getCoreConnection().model('AdminLog', adminLogSchema);
-try {
-  getSecurityConnection().model('AdminLog', adminLogSchema);
-} catch (e) {}
+const AdminLogModel = getOperationsConnection().model('AdminLog', adminLogSchema);
 
 module.exports = AdminLogModel;
 

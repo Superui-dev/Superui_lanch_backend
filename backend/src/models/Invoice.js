@@ -145,6 +145,6 @@ invoiceSchema.pre('validate', async function(next) {
   next();
 });
 
-const { getUsersConnection } = require('../config/db');
-module.exports = getUsersConnection().model('Invoice', invoiceSchema);
+const { getCommerceConnection } = require('../config/db');
+module.exports = getCommerceConnection().model('Invoice', invoiceSchema);
 

@@ -1,11 +1,11 @@
 const Cart = require('../models/Cart');
 const CartItem = require('../models/CartItem');
 const Product = require('../models/Product');
+const { ProductImage, ProductTechStack } = require('../models/ProductSubCollections');
 const { NotFoundError, BadRequestError } = require('../utils/errors');
 const { sendSuccess } = require('../utils/responses');
 
 class CartController {
-  // Helper: Find or create active cart for user
   async getOrCreateCart(userId) {
     let cart = await Cart.findOne({ userId, status: 'active' });
     if (!cart) {
@@ -14,7 +14,6 @@ class CartController {
     return cart;
   }
 
-  // Get active cart and items (populated with product info)
   async getCart(req, res, next) {
     try {
       if (!req.user?._id) {
@@ -22,11 +21,16 @@ class CartController {
       }
       const cart = await this.getOrCreateCart(req.user._id);
       const items = await CartItem.find({ cartId: cart._id })
-        .populate('productId', 'name slug price compareAtPrice thumbnail status')
+        .populate('productId', 'name slug sellingPrice originalPrice discountPercent currency thumbnail status productId')
         .lean();
 
-      // Filter out any products that are no longer published/exist
       const activeItems = items.filter(item => item.productId && item.productId.status === 'published');
+      for (const item of activeItems) {
+        if (item.productId) {
+          item.productId.price = item.productId.sellingPrice;
+          item.productId.compareAtPrice = item.productId.originalPrice;
+        }
+      }
 
       return sendSuccess(res, { cart, items: activeItems }, 'Cart details retrieved');
     } catch (error) {
@@ -34,15 +38,14 @@ class CartController {
     }
   }
 
-  // Add item to cart
   async addToCart(req, res, next) {
     try {
       if (!req.user?._id) {
         return sendSuccess(res, { guest: true }, 'Guest cart updated locally');
       }
       const { productId, quantity = 1 } = req.body;
-      
-      const product = await Product.findOne({ _id: productId, status: 'published' });
+
+      const product = await Product.read.findOne({ _id: productId, status: 'published' });
       if (!product) {
         throw new NotFoundError('Product not found or unavailable');
       }
@@ -67,7 +70,6 @@ class CartController {
     }
   }
 
-  // Update item quantity
   async updateCartItem(req, res, next) {
     try {
       if (!req.user?._id) {
@@ -101,7 +103,6 @@ class CartController {
     }
   }
 
-  // Remove item from cart
   async removeFromCart(req, res, next) {
     try {
       if (!req.user?._id) {
@@ -110,7 +111,7 @@ class CartController {
       const { productId } = req.params;
       const cart = await Cart.findOne({ userId: req.user._id, status: 'active' });
       if (!cart) {
-        throw new NotFoundError('Active cart not found');
+        return new sendSuccess(res, null, 'Cart not found');
       }
 
       const result = await CartItem.deleteOne({ cartId: cart._id, productId });
@@ -124,7 +125,6 @@ class CartController {
     }
   }
 
-  // Clear all items in cart
   async clearCart(req, res, next) {
     try {
       if (!req.user?._id) {

@@ -63,5 +63,5 @@ issueSchema.pre('save', function(next) {
   next();
 });
 
-const { getPromotionsConnection } = require('../config/db');
-module.exports = getPromotionsConnection().model('Issue', issueSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('Issue', issueSchema);

@@ -45,6 +45,6 @@ deliverySchema.pre('validate', async function(next) {
   next();
 });
 
-const { getMessagingConnection } = require('../config/db');
-module.exports = getMessagingConnection().model('Delivery', deliverySchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('Delivery', deliverySchema);
 

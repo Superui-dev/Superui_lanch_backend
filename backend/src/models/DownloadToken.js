@@ -74,5 +74,5 @@ downloadTokenSchema.pre('validate', async function(next) {
   next();
 });
 
-const { getCoreConnection } = require('../config/db');
-module.exports = getCoreConnection().model('DownloadToken', downloadTokenSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('DownloadToken', downloadTokenSchema);

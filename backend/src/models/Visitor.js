@@ -24,12 +24,9 @@ const visitorSchema = new mongoose.Schema({
   timestamps: { createdAt: true, updatedAt: true }
 });
 
-const { getCoreConnection, getAnalyticsConnection } = require('../config/db');
+const { getOperationsConnection } = require('../config/db');
 
-const VisitorModel = getCoreConnection().model('Visitor', visitorSchema);
-try {
-  getAnalyticsConnection().model('Visitor', visitorSchema);
-} catch (e) {}
+const VisitorModel = getOperationsConnection().model('Visitor', visitorSchema);
 
 module.exports = VisitorModel;
 

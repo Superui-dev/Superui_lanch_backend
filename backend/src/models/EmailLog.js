@@ -72,11 +72,8 @@ emailLogSchema.pre('validate', async function(next) {
   next();
 });
 
-const { getCoreConnection, getSecurityConnection } = require('../config/db');
+const { getOperationsConnection } = require('../config/db');
 
-const EmailLogModel = getCoreConnection().model('EmailLog', emailLogSchema);
-try {
-  getSecurityConnection().model('EmailLog', emailLogSchema);
-} catch (e) {}
+const EmailLogModel = getOperationsConnection().model('EmailLog', emailLogSchema);
 
 module.exports = EmailLogModel;

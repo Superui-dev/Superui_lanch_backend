@@ -63,5 +63,5 @@ orderItemSchema.pre('save', function(next) {
   next();
 });
 
-const { getUsersConnection } = require('../config/db');
-module.exports = getUsersConnection().model('OrderItem', orderItemSchema);
+const { getCommerceConnection } = require('../config/db');
+module.exports = getCommerceConnection().model('OrderItem', orderItemSchema);

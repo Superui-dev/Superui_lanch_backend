@@ -38,6 +38,6 @@ const downloadLogSchema = new mongoose.Schema({
   timestamps: false
 });
 
-const { getCoreConnection } = require('../config/db');
-module.exports = getCoreConnection().model('DownloadLog', downloadLogSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('DownloadLog', downloadLogSchema);
 

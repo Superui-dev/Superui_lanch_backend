@@ -19,12 +19,9 @@ const pageViewSchema = new mongoose.Schema({
   timestamps: false
 });
 
-const { getCoreConnection, getAnalyticsConnection } = require('../config/db');
+const { getOperationsConnection } = require('../config/db');
 
-const PageViewModel = getCoreConnection().model('PageView', pageViewSchema);
-try {
-  getAnalyticsConnection().model('PageView', pageViewSchema);
-} catch (e) {}
+const PageViewModel = getOperationsConnection().model('PageView', pageViewSchema);
 
 module.exports = PageViewModel;
 

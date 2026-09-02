@@ -1,12 +1,16 @@
 const express = require('express');
 const router = express.Router();
 const publicController = require('../controllers/public.controller');
+const serviceController = require('../controllers/service.controller');
 const invoiceController = require('../controllers/invoice.controller');
 const { publicLimiter, strictLimiter } = require('../middleware/rateLimiter');
 
 router.use(publicLimiter);
 
 router.get('/categories', publicController.getCategories);
+router.get('/testimonials', publicController.getTestimonials);
+router.get('/services', serviceController.getPublicServices);
+router.get('/services/:slug', serviceController.getPublicServiceBySlug);
 router.get('/products', publicController.getProducts);
 router.get('/products/:slug', publicController.getProductBySlug);
 router.get('/products/:productId/reviews', publicController.getProductReviews);

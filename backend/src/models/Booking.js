@@ -21,5 +21,5 @@ const bookingSchema = new mongoose.Schema({
   timestamps: { createdAt: true, updatedAt: true }
 });
 
-const { getPromotionsConnection } = require('../config/db');
-module.exports = getPromotionsConnection().model('Booking', bookingSchema);
+const { getOperationsConnection } = require('../config/db');
+module.exports = getOperationsConnection().model('Booking', bookingSchema);

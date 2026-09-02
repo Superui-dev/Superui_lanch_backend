@@ -5,17 +5,107 @@ const SiteSettings = require('../models/SiteSettings');
 const HeroImage = require('../models/HeroImage');
 const Wishlist = require('../models/Wishlist');
 const PageView = require('../models/PageView');
+const Testimonial = require('../models/Testimonial');
+const { ProductImage, ProductTechStack, ProductFeature } = require('../models/ProductSubCollections');
 const { NotFoundError } = require('../utils/errors');
 const { sendSuccess } = require('../utils/responses');
 
+async function hydrateProduct(product) {
+  if (!product) return product;
+  const id = product._id;
+  try {
+    const hasImages = Array.isArray(product.images) && product.images.length > 0;
+    const hasTech = (Array.isArray(product.techStack) && product.techStack.length > 0) || (Array.isArray(product.technologies) && product.technologies.length > 0);
+    const hasFeatures = Array.isArray(product.features) && product.features.length > 0;
+
+    if (!hasImages || !hasTech || !hasFeatures) {
+      const [images, techStack, features] = await Promise.all([
+        hasImages ? Promise.resolve([]) : ProductImage.findAllForProduct(id).catch(() => []),
+        hasTech ? Promise.resolve([]) : ProductTechStack.findAllForProduct(id).catch(() => []),
+        hasFeatures ? Promise.resolve([]) : ProductFeature.findAllForProduct(id).catch(() => [])
+      ]);
+      if (!hasImages && images.length > 0) {
+        product.images = images.map(img => ({ url: img.url, alt: img.alt, order: img.sortOrder }));
+      }
+      if (!hasTech && techStack.length > 0) {
+        product.techStack = techStack;
+      }
+      if (!hasFeatures && features.length > 0) {
+        product.features = features.map(f => ({ title: f.title, description: f.description }));
+      }
+    }
+  } catch (e) {}
+
+  if (!product.price && product.sellingPrice) product.price = product.sellingPrice;
+  if (!product.compareAtPrice && product.originalPrice) product.compareAtPrice = product.originalPrice;
+  if (!product.technologies && product.techStack) {
+    product.technologies = product.techStack.map(t => ({ name: t.name, icon: t.icon }));
+  }
+  return product;
+}
+
 class PublicController {
-  // Get all visible categories
+  // Get all visible categories (includes auto-synced service cards)
   async getCategories(req, res, next) {
     try {
-      const categories = await Category.find({ visible: true }).sort({ order: 1 }).lean();
-      return sendSuccess(res, categories, 'Categories fetched successfully');
+      // Auto-sync DB4 services into Category collection (best-effort, non-blocking)
+      try {
+        const Service = require('../models/Service');
+        await Service.seedDefaultsIfEmpty();
+        const services = await Service.find({ visible: true }).sort({ order: 1 }).lean();
+        if (Array.isArray(services) && services.length > 0) {
+          for (let i = 0; i < services.length; i++) {
+            const s = services[i];
+            if (!s.title) continue;
+            const slug = (s.slug || s.title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w\-]+/g, '')).toLowerCase();
+            try {
+              await Category.findOneAndUpdate(
+                { slug },
+                {
+                  $set: {
+                    name: s.title,
+                    description: s.description || '',
+                    visible: s.visible !== false,
+                    order: s.order || i + 1,
+                    productType: 'website-template'
+                  },
+                  $setOnInsert: { slug }
+                },
+                { upsert: true, new: true, setDefaultsOnInsert: true }
+              );
+            } catch (upsertErr) {
+              // Ignore individual upsert errors (e.g., immutable field conflict)
+            }
+          }
+        }
+      } catch (syncErr) {
+        // Service sync failure should never block category fetch
+      }
+
+      const categories = await Category.read.find({ visible: true }, { sort: { order: 1 } });
+
+      // Attach the count of products created in each category
+      const enriched = await Promise.all((categories || []).map(async (cat) => {
+        let productCount = 0;
+        try {
+          productCount = await Product.read.countDocuments({ categoryId: cat._id });
+        } catch (e) { /* ignore count errors, default to 0 */ }
+        return { ...cat, productCount };
+      }));
+
+      return sendSuccess(res, enriched, 'Categories fetched successfully');
     } catch (error) {
       return next(error);
+    }
+  }
+
+  // Get all visible testimonials
+  async getTestimonials(req, res, next) {
+    try {
+      const testimonials = await Testimonial.find({ visible: true }).sort({ order: 1, createdAt: -1 }).lean();
+      return sendSuccess(res, testimonials, 'Testimonials fetched successfully');
+    } catch (error) {
+      return sendSuccess(res, [], 'Testimonials empty fallback');
     }
   }
 
@@ -26,7 +116,7 @@ class PublicController {
       const query = { status: 'published' };
 
       if (category) {
-        const cat = await Category.findOne({ slug: category });
+        const cat = await Category.read.findOne({ slug: category });
         if (cat) {
           query.categoryId = cat._id;
         }
@@ -47,19 +137,17 @@ class PublicController {
       const parsedLimit = parseInt(limit, 10) || 12;
       const skip = (parsedPage - 1) * parsedLimit;
 
-      const products = await Product.find(query)
-        .populate('categoryId', 'name slug')
-        .skip(skip)
-        .limit(parsedLimit)
-        .sort({ createdAt: -1 })
-        .select('-files') // Exclude private download links from public listing
-        .lean();
+      const allMatching = await Product.read.find(query, { skip: 0, limit: skip + parsedLimit });
+      const products = allMatching
+        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .slice(skip, skip + parsedLimit);
 
       const productsWithStats = await Promise.all(products.map(async (prod) => {
         const [watchlistCount, viewsCount] = await Promise.all([
-          Wishlist.countDocuments({ productIds: prod._id }),
-          PageView.countDocuments({ page: `/products/${prod.slug}` })
+          Wishlist.countDocuments({ productIds: prod._id }).catch(() => 0),
+          PageView.countDocuments({ page: `/products/${prod.slug}` }).catch(() => 0)
         ]);
+        await hydrateProduct(prod);
         return {
           ...prod,
           watchlistCount,
@@ -67,7 +155,7 @@ class PublicController {
         };
       }));
 
-      const total = await Product.countDocuments(query);
+      const total = await Product.read.countDocuments(query);
 
       return sendSuccess(res, {
         products: productsWithStats,
@@ -87,18 +175,15 @@ class PublicController {
   async getProductBySlug(req, res, next) {
     try {
       const { slug } = req.params;
-      const product = await Product.findOne({ slug, status: 'published' })
-        .populate('categoryId', 'name slug')
-        .select('-files') // Hide private file structures
-        .lean();
+      const product = await Product.read.findOne({ slug, status: 'published' });
 
       if (!product) {
         throw new NotFoundError('Product not found');
       }
 
       const [watchlistCount, viewsCount] = await Promise.all([
-        Wishlist.countDocuments({ productIds: product._id }),
-        PageView.countDocuments({ page: `/products/${product.slug}` })
+        Wishlist.countDocuments({ productIds: product._id }).catch(() => 0),
+        PageView.countDocuments({ page: `/products/${product.slug}` }).catch(() => 0)
       ]);
 
       const productWithStats = {
@@ -106,6 +191,8 @@ class PublicController {
         watchlistCount,
         viewsCount
       };
+
+      await hydrateProduct(productWithStats);
 
       return sendSuccess(res, productWithStats, 'Product details fetched successfully');
     } catch (error) {

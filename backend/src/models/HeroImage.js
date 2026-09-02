@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { getCatalogDb1Connection } = require('../config/db');
 
 const heroImageSchema = new mongoose.Schema({
   imageUrl: { type: String, required: true },
@@ -11,4 +12,4 @@ const heroImageSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('HeroImage', heroImageSchema);
+module.exports = getCatalogDb1Connection().model('HeroImage', heroImageSchema);

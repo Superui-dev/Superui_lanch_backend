@@ -101,6 +101,7 @@ adminRouter.use('/orders', require('./routes/admin/orders.admin.routes'));
 adminRouter.use('/payments', require('./routes/admin/payments.admin.routes'));
 adminRouter.use('/bookings', require('./routes/admin/bookings.admin.routes'));
 adminRouter.use('/downloads', require('./routes/admin/downloads.admin.routes'));
+adminRouter.use('/download', require('./routes/admin/downloads.admin.routes'));
 adminRouter.use('/contacts', require('./routes/admin/contacts.admin.routes'));
 adminRouter.use('/email', require('./routes/admin/email.admin.routes'));
 adminRouter.use('/telegram', require('./routes/admin/telegram.admin.routes'));
@@ -112,6 +113,7 @@ adminRouter.use('/settings', require('./routes/admin/settings.admin.routes'));
 adminRouter.use('/security', require('./routes/admin/security.admin.routes'));
 adminRouter.use('/health', require('./routes/admin/health.admin.routes'));
 adminRouter.use('/hero-images', require('./routes/admin/hero.admin.routes'));
+adminRouter.use('/services', require('./routes/admin/service.admin.routes'));
 
 app.use('/api/admin', adminRouter);
 
