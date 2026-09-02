@@ -104,7 +104,6 @@ class EmailService {
     let name1, name2, name3;
 
     if (sent1 < 300 && sent2 < 300) {
-      // Both delivery accounts are available. Run standard round-robin.
       const useDelivery1 = (this.sendCounter % 2 === 0);
       this.sendCounter++;
 
@@ -118,77 +117,73 @@ class EmailService {
         backup2 = admin; name3 = 'admin';
       }
     } else if (sent1 < 300 && sent2 >= 300) {
-      // Delivery 2 hit limit (300/day). Use Delivery 1, then fallback to Admin.
       activeTransport = delivery1; name1 = 'delivery1';
       backup1 = admin; name2 = 'admin';
       backup2 = null; name3 = null;
       logger.warn('Delivery 2 SMTP daily limit (300) reached. Routing via Delivery 1.');
     } else if (sent1 >= 300 && sent2 < 300) {
-      // Delivery 1 hit limit (300/day). Use Delivery 2, then fallback to Admin.
       activeTransport = delivery2; name1 = 'delivery2';
       backup1 = admin; name2 = 'admin';
       backup2 = null; name3 = null;
       logger.warn('Delivery 1 SMTP daily limit (300) reached. Routing via Delivery 2.');
     } else {
-      // Both reached 300 limit. Fall back to Admin SMTP.
       activeTransport = admin; name1 = 'admin';
       backup1 = null; name2 = null;
       backup2 = null; name3 = null;
       logger.warn('Daily limit of 600 reached on primary senders. Using Admin SMTP for product delivery.');
     }
 
+    const sendWithTimeout = (transportObj, transportName, timeoutMs = 10000) => {
+      return Promise.race([
+        transportObj.sendMail({
+          from: transportObj.fromAddress,
+          to: toAddress,
+          subject,
+          html: htmlContent
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error(`SMTP timeout after ${timeoutMs}ms on ${transportName}`)), timeoutMs)
+        )
+      ]);
+    };
+
     try {
       logger.info(`Attempting to send product delivery email via ${name1}`);
-      const info = await activeTransport.sendMail({
-        from: activeTransport.fromAddress,
-        to: toAddress,
-        subject,
-        html: htmlContent
-      });
+      const info = await sendWithTimeout(activeTransport, name1, 8000);
 
-      await this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'sent');
+      this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'sent').catch(() => {});
       return info;
     } catch (err) {
       if (!backup1) {
         logger.error(`Primary transport ${name1} failed and no backup configured: ${err.message}`);
-        await this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'failed', err.message);
+        this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'failed', err.message).catch(() => {});
         throw err;
       }
 
-      logger.error(`Failed to send email via primary transport ${name1}: ${err.message}. Trying backup 1 ${name2}.`);
+      logger.warn(`Primary transport ${name1} failed: ${err.message}. Trying backup 1 ${name2}.`);
       
       try {
-        const info = await backup1.sendMail({
-          from: backup1.fromAddress,
-          to: toAddress,
-          subject,
-          html: htmlContent
-        });
+        const info = await sendWithTimeout(backup1, name2, 6000);
 
-        await this.logEmail(name2, backup1.fromAddress, toAddress, subject, order._id, 'sent');
+        this.logEmail(name2, backup1.fromAddress, toAddress, subject, order._id, 'sent').catch(() => {});
         return info;
       } catch (backupErr1) {
         if (!backup2) {
           logger.error(`Backup 1 transport ${name2} failed and no backup 2 configured: ${backupErr1.message}`);
-          await this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'failed', backupErr1.message);
+          this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'failed', backupErr1.message).catch(() => {});
           throw backupErr1;
         }
 
-        logger.error(`Failed to send email via backup 1 transport ${name2}: ${backupErr1.message}. Trying backup 2 ${name3}.`);
+        logger.warn(`Backup 1 transport ${name2} failed: ${backupErr1.message}. Trying backup 2 ${name3}.`);
         
         try {
-          const info = await backup2.sendMail({
-            from: backup2.fromAddress,
-            to: toAddress,
-            subject,
-            html: htmlContent
-          });
+          const info = await sendWithTimeout(backup2, name3, 4000);
 
-          await this.logEmail(name3, backup2.fromAddress, toAddress, subject, order._id, 'sent');
+          this.logEmail(name3, backup2.fromAddress, toAddress, subject, order._id, 'sent').catch(() => {});
           return info;
         } catch (backupErr2) {
-          logger.error(`Failed to send email via backup 2 transport ${name3}: ${backupErr2.message}. Delivery failed.`);
-          await this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'failed', backupErr2.message);
+          logger.error(`All email transports failed. Last error (${name3}): ${backupErr2.message}`);
+          this.logEmail(name1, activeTransport.fromAddress, toAddress, subject, order._id, 'failed', backupErr2.message).catch(() => {});
           throw backupErr2;
         }
       }
@@ -265,4 +260,3 @@ class EmailService {
 }
 
 module.exports = new EmailService();
-

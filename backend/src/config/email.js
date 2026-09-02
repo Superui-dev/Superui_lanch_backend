@@ -30,11 +30,15 @@ function createSMTPTransport(prefix, label) {
   const transport = nodemailer.createTransport({
     host,
     port,
-    secure: port === 465, // true for 465, false for other ports
+    secure: port === 465,
     auth: {
       user,
       pass
-    }
+    },
+    connectionTimeout: 5000,
+    socketTimeout: 8000,
+    greetingTimeout: 3000,
+    dnsTimeout: 3000
   });
 
   return {

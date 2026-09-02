@@ -34,16 +34,14 @@ function freePort(port) {
       pids.forEach(pid => {
         try {
           execSync(`taskkill /F /PID ${pid}`, { stdio: 'ignore' });
-          logger.info(`Terminated lingering process (PID ${pid}) on port ${port}`);
+          logger.info(`Terminated lingering process (PID ${pid}) on port ${PORT}`);
         } catch (e) {}
       });
     }
   } catch (e) {}
 }
 
-async function bootstrap() {
-  await connectDB();
-
+function bootstrap() {
   const server = http.createServer(app);
 
   initSockets(server);
@@ -80,6 +78,10 @@ async function bootstrap() {
     logger.info(`===============================================`);
   });
 
+  connectDB().catch(err => {
+    logger.error(`Background MongoDB connection failed: ${err.message}`);
+  });
+
   const shutdown = () => {
     logger.warn('SIGTERM/SIGINT signal received. Shutting down gracefully...');
     expressServer.close(() => {
@@ -107,4 +109,3 @@ async function bootstrap() {
 }
 
 bootstrap();
-

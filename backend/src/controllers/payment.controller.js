@@ -150,9 +150,6 @@ class PaymentController {
         throw new BadRequestError('Payment verification failed (First check failed)');
       }
 
-      // Delay for 500 milliseconds before performing the second check
-      await new Promise(resolve => setTimeout(resolve, 500));
-
       // Second Verification: API status check or fallback signature check
       let isValidSecond = false;
       const isPlaceholderKey = !process.env.RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET.includes('your_razorpay');
