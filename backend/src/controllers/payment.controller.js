@@ -257,9 +257,17 @@ class PaymentController {
           5 // limit to 5 downloads
         );
 
+        const productAccessToken = await downloadService.generateProductAccessToken(
+          freshOrder._id,
+          item._id,
+          freshOrder.userId,
+          item.productId
+        );
+
         deliveryTokens.push({
           productName: item.productName,
-          tokenValue: rawToken
+          tokenValue: rawToken,
+          productAccessToken
         });
       }
 
@@ -369,15 +377,61 @@ class PaymentController {
 
           await Order.findByIdAndUpdate(payment.orderId, {
             paymentStatus: 'FAILED',
-            orderStatus: 'PENDING' // Keep order pending to allow customer retry
+            orderStatus: 'PENDING'
           });
 
-          // Broadcast failure to Admin dashboard
           broadcastToAdmins(events.ADMIN_PAYMENT_FAILED, {
             gatewayOrderId,
             gatewayPaymentId,
             reason: paymentPayload.error_description
           });
+        }
+      } else if (eventType === 'payment.refunded' || eventType === 'payment.partial_payment_refunded' || eventType === 'payment.disputed') {
+        const payment = await Payment.findOne({ gatewayOrderId });
+        if (payment) {
+          const refundAmount = paymentPayload.amount_refunded || (payload.payload.refund ? payload.payload.refund.entity.amount : 0);
+          const order = await Order.findById(payment.orderId);
+
+          await Payment.findByIdAndUpdate(payment._id, {
+            paymentStatus: eventType.includes('refund') && eventType.includes('partial') ? 'PARTIALLY_REFUNDED' : (eventType.includes('refund') ? 'REFUNDED' : payment.paymentStatus),
+            rawResponse: payload
+          });
+
+          if (order) {
+            if (eventType === 'payment.refunded') {
+              await Order.findByIdAndUpdate(order._id, {
+                paymentStatus: 'REFUNDED',
+                orderStatus: 'COMPLETED'
+              });
+            } else if (eventType === 'payment.partial_payment_refunded') {
+              await Order.findByIdAndUpdate(order._id, {
+                paymentStatus: 'PARTIALLY_REFUNDED'
+              });
+            } else if (eventType === 'payment.disputed') {
+              await Order.findByIdAndUpdate(order._id, {
+                paymentStatus: 'DISPUTED'
+              });
+            }
+
+            const DownloadToken = require('../models/DownloadToken');
+            await DownloadToken.updateMany(
+              { orderId: order._id, revokedAt: null },
+              { revokedAt: new Date() }
+            );
+
+            if (req.logAudit) {
+              // Best-effort audit logging of refund-induced token revocation
+            }
+
+            broadcastToAdmins(events.ADMIN_ORDER_REFUNDED, {
+              gatewayOrderId,
+              gatewayPaymentId,
+              orderId: order._id,
+              orderNumber: order.orderNumber,
+              refundAmount,
+              refundEvent: eventType
+            });
+          }
         }
       }
 

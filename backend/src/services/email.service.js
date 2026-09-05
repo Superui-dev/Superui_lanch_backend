@@ -20,8 +20,12 @@ class EmailService {
     const linksHtml = tokens.map(t => `
       <div style="margin: 20px 0; padding: 15px; background: #f9f9f9; border-radius: 5px; border-left: 4px solid #4F46E5;">
         <p style="margin: 0 0 10px 0; font-weight: bold; color: #333;">${t.productName}</p>
-        <a href="${process.env.FRONTEND_ORIGIN}/download/${t.tokenValue}" 
+        <a href="${process.env.FRONTEND_ORIGIN}/products?access_token=${t.productAccessToken}" 
            style="background: #4F46E5; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; display: inline-block; font-size: 14px;">
+           View Product Page
+        </a>
+        <a href="${process.env.FRONTEND_ORIGIN}/download/${t.tokenValue}" 
+           style="background: #10B981; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; display: inline-block; font-size: 14px; margin-left: 10px;">
            Download Product Files
         </a>
         <p style="margin: 8px 0 0 0; font-size: 11px; color: #666;">Expires in 15 minutes. Limited to 5 downloads.</p>

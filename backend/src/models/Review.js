@@ -34,5 +34,7 @@ const reviewSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('Review', reviewSchema);
+const { getCatalogDb1Connection } = require('../config/db');
+
+module.exports = getCatalogDb1Connection().model('Review', reviewSchema);
 

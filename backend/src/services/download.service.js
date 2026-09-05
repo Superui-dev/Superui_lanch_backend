@@ -6,6 +6,7 @@ const Product = require('../models/Product');
 const { hashToken } = require('../utils/hash');
 const { BadRequestError, NotFoundError } = require('../utils/errors');
 const logger = require('../utils/logger');
+const r2Service = require('./r2Service');
 
 class DownloadService {
   async generateToken(orderId, orderItemId, userId, productId, maxDownloads = 5) {
@@ -21,8 +22,32 @@ class DownloadService {
       userId,
       productId,
       tokenHash,
+      type: 'download',
       expiresAt,
       maxDownloads,
+      downloadCount: 0,
+      revokedAt: null
+    });
+
+    return rawToken;
+  }
+
+  async generateProductAccessToken(orderId, orderItemId, userId, productId) {
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    const tokenHash = hashToken(rawToken);
+
+    const ttlMinutes = parseInt(process.env.PRODUCT_ACCESS_TOKEN_TTL_MINUTES, 10) || 60;
+    const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+
+    await DownloadToken.create({
+      orderId,
+      orderItemId,
+      userId,
+      productId,
+      tokenHash,
+      type: 'product_access',
+      expiresAt,
+      maxDownloads: 0,
       downloadCount: 0,
       revokedAt: null
     });
@@ -89,15 +114,35 @@ class DownloadService {
       throw new NotFoundError('No files attached to this product');
     }
 
-    // Return Drive links directly from the database — no cloud storage signing needed
-    const filesWithUrls = product.files.map(file => ({
-      name: file.name,
-      mimeType: file.mimeType,
-      size: file.size,
-      downloadUrl: file.driveUrl
+    const filesWithUrls = await Promise.all(product.files.map(async (file) => {
+      let downloadUrl = null;
+
+      if (file.key && (file.storageProvider === 'r2' || !file.storageProvider)) {
+        try {
+          downloadUrl = await r2Service.generatePresignedDownloadUrl(file.key);
+        } catch (r2Err) {
+          logger.error(`Failed to generate R2 presigned URL for key "${file.key}": ${r2Err.message}`);
+          downloadUrl = null;
+        }
+      }
+
+      if (!downloadUrl && file.driveUrl) {
+        downloadUrl = file.driveUrl;
+      }
+
+      return {
+        name: file.name,
+        fileName: file.fileName || file.name,
+        mimeType: file.mimeType,
+        size: file.size,
+        downloadUrl,
+        storageProvider: file.storageProvider || 'r2',
+        key: file.key
+      };
     }));
 
-    if (filesWithUrls.length === 0) {
+    const hasValidUrls = filesWithUrls.some(f => f.downloadUrl);
+    if (!hasValidUrls) {
       await logAttempt('FAILED');
       throw new Error('No download links available for this product');
     }

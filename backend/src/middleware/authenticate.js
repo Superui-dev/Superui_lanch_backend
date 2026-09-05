@@ -30,16 +30,16 @@ async function authenticate(req, res, next) {
     let role = 'customer';
     let mongoUserId = null;
 
-    // 1. Check for custom Admin JWT (signed with MFA_JWT_SECRET)
+    // 1. Check for custom JWT (signed with MFA_JWT_SECRET or JWT_SECRET)
     try {
-      const secret = process.env.MFA_JWT_SECRET || 'a3f8c9b1e4d7f2a6c5b8e9d1f4a7c2e5b8d1f4a7c2e5b8d1f4a7c2e5b8d1f4a7';
+      const secret = process.env.MFA_JWT_SECRET || process.env.JWT_SECRET || 'a3f8c9b1e4d7f2a6c5b8e9d1f4a7c2e5b8d1f4a7c2e5b8d1f4a7c2e5b8d1f4a7';
       if (secret) {
-        const decodedAdmin = jwt.verify(token, secret);
-        if (decodedAdmin && decodedAdmin.role === 'admin' && decodedAdmin.email) {
-          authUserId = decodedAdmin.id || decodedAdmin.authUserId || decodedAdmin.userId;
-          mongoUserId = decodedAdmin.userId;
-          email = decodedAdmin.email;
-          role = 'admin';
+        const decoded = jwt.verify(token, secret);
+        if (decoded && decoded.email) {
+          authUserId = decoded.id || decoded.authUserId || decoded.userId;
+          mongoUserId = decoded.userId;
+          email = decoded.email;
+          role = decoded.role || 'customer';
         }
       }
     } catch (e) {}

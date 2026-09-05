@@ -111,6 +111,7 @@ class CategoryFacade {
             for (const d of docs) if (!seen.has(String(d._id))) { seen.add(String(d._id)); out.push(d); }
           } catch (e) {}
         }
+        out.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
         return out;
       },
       findOne: async (q) => {

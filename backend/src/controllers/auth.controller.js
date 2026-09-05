@@ -93,6 +93,36 @@ class AuthController {
     }
   }
 
+  // Get MFA TOTP setup data (QR code, secret, and URI) for admin account
+  async getMfaSetup(req, res, next) {
+    try {
+      if (!req.user || req.user.role !== 'admin') {
+        throw new BadRequestError('MFA setup is restricted to administrator accounts only');
+      }
+
+      const adminUser = await User.findById(req.user._id).select('+mfaSecret');
+      if (!adminUser) {
+        throw new BadRequestError('Admin user not found');
+      }
+
+      // Ensure a persistent secret is set for this admin user
+      const secret = adminUser.mfaSecret || process.env.ADMIN_TOTP_SECRET || 'JBSWY3DPEHPK3PXP';
+      if (!adminUser.mfaSecret) {
+        adminUser.mfaSecret = secret;
+        adminUser.mfaEnabled = true;
+        await adminUser.save();
+      }
+
+      const accountEmail = adminUser.email || 'hello.superui@gmail.com';
+      const uri = `otpauth://totp/SuperUI%20Admin:${encodeURIComponent(accountEmail)}?secret=${secret}&issuer=SuperUI`;
+      const qrCode = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=2&data=${encodeURIComponent(uri)}`;
+
+      return sendSuccess(res, { secret, uri, qrCode }, 'MFA setup retrieved successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   // MFA TOTP verification endpoint for admin login sequence
   async verifyAdminMfa(req, res, next) {
     try {
@@ -135,13 +165,9 @@ class AuthController {
 
       // 2. Server-side RFC 6238 TOTP verification against registered secret
       if (!verified) {
-        const secret = req.user.totpSecret || process.env.ADMIN_TOTP_SECRET || 'JBSWY3DPEHPK3PXP';
+        const adminUser = await User.findById(req.user._id).select('+mfaSecret');
+        const secret = adminUser?.mfaSecret || req.user.totpSecret || process.env.ADMIN_TOTP_SECRET || 'JBSWY3DPEHPK3PXP';
         verified = verifyTotpToken(secret, code);
-
-        // Fallback test/master TOTP codes to prevent lockouts during testing
-        if (!verified && (code === '123456' || code === '000000' || code === '654321' || code === '888888')) {
-          verified = true;
-        }
       }
 
       if (!verified) {
@@ -398,7 +424,14 @@ class AuthController {
         }
       }
 
-      return sendSuccess(res, { synced: true, user: syncedUser }, 'Login sync processed');
+      const secret = process.env.MFA_JWT_SECRET || process.env.JWT_SECRET || 'a3f8c9b1e4d7f2a6c5b8e9d1f4a7c2e5b8d1f4a7c2e5b8d1f4a7c2e5b8d1f4a7';
+      const token = jwt.sign(
+        { userId: syncedUser._id.toString(), id: syncedUser.authUserId, email: syncedUser.email, role: syncedUser.role || 'customer' },
+        secret,
+        { expiresIn: '30d' }
+      );
+
+      return sendSuccess(res, { synced: true, user: syncedUser, token }, 'Login sync processed');
     } catch (error) {
       logger.error('Login sync error detail:', error);
       return sendSuccess(res, { synced: false, error: error.message }, 'Login sync warning handled');

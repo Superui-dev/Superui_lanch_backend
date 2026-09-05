@@ -5,6 +5,7 @@ module.exports = {
   ADMIN_PAYMENT_FAILED: 'admin:payment-failed',
   ADMIN_SYSTEM_HEALTH: 'admin:system-health',
   ADMIN_DOWNLOAD_REVOKED: 'admin:download-revoked',
+  ADMIN_ORDER_REFUNDED: 'admin:order-refunded',
   
   CONNECTION: 'connection',
   DISCONNECT: 'disconnect'

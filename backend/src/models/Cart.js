@@ -17,5 +17,7 @@ const cartSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('Cart', cartSchema);
+const { getCommerceConnection } = require('../config/db');
+
+module.exports = getCommerceConnection().model('Cart', cartSchema);
 

@@ -16,8 +16,11 @@ const Testimonial = require('../models/Testimonial');
 const PageView = require('../models/PageView');
 const Visitor = require('../models/Visitor');
 const HeroImage = require('../models/HeroImage');
+const { ProductImage, ProductTechStack, ProductFeature } = require('../models/ProductSubCollections');
 const healthService = require('../services/health.service');
 const emailService = require('../services/email.service');
+const r2Service = require('../services/r2Service');
+const logger = require('../utils/logger');
 const { NotFoundError, BadRequestError } = require('../utils/errors');
 const { sendSuccess } = require('../utils/responses');
 
@@ -29,15 +32,19 @@ class AdminController {
   // List ALL products for admin regardless of status (published, draft, archived)
   async listAdminProducts(req, res, next) {
     try {
-      const { status, limit = 200, page = 1 } = req.query;
+      const { status, categoryId, limit = 200, page = 1 } = req.query;
       const query = {};
       if (status && status !== 'all') {
         query.status = status;
       }
+      if (categoryId) {
+        query.categoryId = categoryId;
+      }
       const skip = (parseInt(page, 10) - 1) * parseInt(limit, 10);
       const products = await Product.primary
         .find(query)
-        .sort({ createdAt: -1 })
+        .populate('categoryId', 'name slug')
+        .sort({ order: 1, createdAt: -1 })
         .skip(skip)
         .limit(parseInt(limit, 10))
         .lean();
@@ -49,8 +56,23 @@ class AdminController {
         Product.primary.countDocuments({ status: 'archived' })
       ]);
 
+      const enrichedProducts = (products || []).map(p => {
+        const op = p.originalPrice || p.compareAtPrice || p.actualPrice || p.price || 0;
+        const sp = p.sellingPrice || p.price || op;
+        const discount = p.discountPercent || (op > 0 && sp > 0 && op >= sp ? Math.round(((op - sp) / op) * 100) : 0);
+        return {
+          ...p,
+          originalPrice: op,
+          compareAtPrice: op,
+          actualPrice: op,
+          sellingPrice: sp,
+          price: sp,
+          discountPercent: discount
+        };
+      });
+
       return sendSuccess(res, {
-        products,
+        products: enrichedProducts,
         total,
         statusCounts: {
           published: counts[0],
@@ -64,37 +86,121 @@ class AdminController {
     }
   }
 
+  // Reorder products (supports moving up/down positions)
+  async reorderProducts(req, res, next) {
+    try {
+      const { orderedIds } = req.body;
+      if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+        return sendSuccess(res, { message: 'No product IDs provided' });
+      }
+
+      const bulkOps = orderedIds.map((id, index) => ({
+        updateOne: {
+          filter: { _id: id },
+          update: { $set: { order: index } }
+        }
+      }));
+
+      await Product.primary.bulkWrite(bulkOps);
+      return sendSuccess(res, { count: orderedIds.length }, 'Products reordered successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  // Reorder categories (bulk updates order sequence for drag and drop / arrow reordering)
+  async reorderCategories(req, res, next) {
+    try {
+      const { orderedIds } = req.body;
+      if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+        return sendSuccess(res, { message: 'No category IDs provided' });
+      }
+
+      const mongoose = require('mongoose');
+      const Service = require('../models/Service');
+      const { getCatalogReadConnections } = require('../config/db');
+
+      const bulkOps = orderedIds.map((id, index) => {
+        const filter = mongoose.Types.ObjectId.isValid(id)
+          ? { $or: [{ _id: new mongoose.Types.ObjectId(id) }, { _id: String(id) }] }
+          : { _id: id };
+        return {
+          updateOne: {
+            filter,
+            update: { $set: { order: index + 1 } }
+          }
+        };
+      });
+
+      // Update all catalog connections
+      for (const conn of getCatalogReadConnections()) {
+        try {
+          const CatModel = conn.model('Category');
+          await CatModel.bulkWrite(bulkOps);
+        } catch (err) {
+          // ignore individual conn errors
+        }
+      }
+
+      // Also sync the order to matching Service cards in DB4
+      for (let i = 0; i < orderedIds.length; i++) {
+        const id = orderedIds[i];
+        const orderNum = i + 1;
+        try {
+          const cat = await Category.read.findById(id);
+          if (cat && cat.slug) {
+            await Service.updateMany(
+              { $or: [{ slug: cat.slug }, { title: new RegExp('^' + cat.name + '$', 'i') }] },
+              { $set: { order: orderNum } }
+            );
+          }
+        } catch (serviceErr) {
+          // Ignore individual service update errors
+        }
+      }
+
+      return sendSuccess(res, { count: orderedIds.length }, 'Categories reordered successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
   async createProduct(req, res, next) {
     try {
       const mongoose = require('mongoose');
       const { ProductImage, ProductTechStack, ProductFeature } = require('../models/ProductSubCollections');
 
       let categoryId = req.body.categoryId;
-      if (!categoryId && req.body.category) {
-        const catInput = String(req.body.category).trim();
-        const catSlug = catInput.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
-        let cat = await Category.findOne({
-          $or: [
-            { slug: catSlug },
-            { name: new RegExp('^' + catInput + '$', 'i') }
-          ]
-        });
-        if (!cat) {
-          const catName = catInput.charAt(0).toUpperCase() + catInput.slice(1);
-          cat = await Category.create({
-            name: catName,
-            slug: catSlug || `cat-${Date.now()}`,
-            description: `${catName} category`
+      const isValidObjectId = categoryId && mongoose.Types.ObjectId.isValid(categoryId);
+
+      if (!isValidObjectId) {
+        const catInput = String(categoryId || req.body.category || '').trim();
+        let cat = null;
+        if (catInput) {
+          const catSlug = catInput.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+          cat = await Category.findOne({
+            $or: [
+              { slug: catSlug },
+              { slug: catInput },
+              { name: new RegExp('^' + catInput + '$', 'i') }
+            ]
           });
+          if (!cat) {
+            const catName = catInput.charAt(0).toUpperCase() + catInput.slice(1);
+            cat = await Category.create({
+              name: catName,
+              slug: catSlug || `cat-${Date.now()}`,
+              description: `${catName} category`
+            });
+          }
+        }
+        if (!cat) {
+          cat = await Category.findOne({});
+          if (!cat) {
+            cat = await Category.create({ name: 'General', slug: 'general', description: 'General Assets' });
+          }
         }
         categoryId = cat._id;
-      }
-      if (!categoryId) {
-        let defaultCat = await Category.findOne({});
-        if (!defaultCat) {
-          defaultCat = await Category.create({ name: 'General', slug: 'general', description: 'General Assets' });
-        }
-        categoryId = defaultCat._id;
       }
 
       const {
@@ -146,16 +252,22 @@ class AdminController {
         throw new BadRequestError('Product thumbnail URL is required');
       }
 
+      const discount = op > 0 && sp > 0 && op >= sp ? Math.round(((op - sp) / op) * 100) : 0;
       const product = await Product.create({
         name: name.trim(),
         shortDescription: (shortDescription || '').trim(),
         description: description || '',
         originalPrice: op,
+        compareAtPrice: op,
+        actualPrice: op,
         sellingPrice: sp,
+        price: sp,
+        discountPercent: discount,
         currency: (currency || 'INR').toUpperCase(),
         saleBadge: saleBadge || '',
         fileType: fileType || 'template',
         isActive: isActive !== false,
+        order: req.body.order !== undefined ? Number(req.body.order) : 0,
         categoryId,
         thumbnail: { url: thumbnail.url, key: thumbnail.key || '', alt: thumbnail.alt || name },
         status: status || 'draft',
@@ -201,6 +313,19 @@ class AdminController {
         await ProductFeature.replaceForProduct(product._id, featureDocs);
       }
 
+      if (Array.isArray(req.body.files) && req.body.files.length > 0) {
+        const fileDocs = req.body.files.map((f) => ({
+          name: f.name || f.fileName || '',
+          key: f.key || '',
+          fileName: f.fileName || f.name || '',
+          mimeType: f.mimeType || '',
+          size: f.size || 0,
+          driveUrl: f.driveUrl || '',
+          storageProvider: f.storageProvider || 'r2'
+        }));
+        await Product.findByIdAndUpdate(product._id, { files: fileDocs });
+      }
+
       if (req.logAudit) {
         req.logAudit('CREATE_PRODUCT', 'Product', product._id, {
           productId: product.productId,
@@ -230,7 +355,7 @@ class AdminController {
       const updatable = {};
       const allowed = [
         'name', 'shortDescription', 'description', 'originalPrice', 'sellingPrice',
-        'currency', 'saleBadge', 'fileType', 'isActive', 'categoryId',
+        'currency', 'saleBadge', 'fileType', 'isActive', 'categoryId', 'order',
         'thumbnail', 'status', 'version', 'featured', 'tags', 'metaTitle',
         'metaDescription', 'liveUrl', 'demoUrl', 'highlights', 'whatsIncluded',
         'archivedReason'
@@ -239,17 +364,58 @@ class AdminController {
         if (req.body[key] !== undefined) updatable[key] = req.body[key];
       }
 
+      if (updatable.categoryId === undefined && req.body.category !== undefined) {
+        updatable.categoryId = req.body.category;
+      }
+
+      if (updatable.categoryId !== undefined) {
+        const mongoose = require('mongoose');
+        const isValid = updatable.categoryId && mongoose.Types.ObjectId.isValid(updatable.categoryId);
+        if (!isValid) {
+          const catInput = String(updatable.categoryId || req.body.category || '').trim();
+          if (catInput) {
+            const catSlug = catInput.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+            let cat = await Category.findOne({
+              $or: [
+                { slug: catSlug },
+                { slug: catInput },
+                { name: new RegExp('^' + catInput + '$', 'i') }
+              ]
+            });
+            if (cat) {
+              updatable.categoryId = cat._id;
+            } else {
+              delete updatable.categoryId;
+            }
+          } else {
+            delete updatable.categoryId;
+          }
+        }
+      }
+
       let op = updatable.originalPrice !== undefined ? Number(updatable.originalPrice) : (req.body.compareAtPrice !== undefined ? Number(req.body.compareAtPrice) : undefined);
       let sp = updatable.sellingPrice !== undefined ? Number(updatable.sellingPrice) : (req.body.price !== undefined ? Number(req.body.price) : undefined);
 
-      if (op !== undefined) updatable.originalPrice = op;
-      if (sp !== undefined) updatable.sellingPrice = sp;
+      if (op !== undefined) {
+        updatable.originalPrice = op;
+        updatable.compareAtPrice = op;
+        updatable.actualPrice = op;
+      }
+      if (sp !== undefined) {
+        updatable.sellingPrice = sp;
+        updatable.price = sp;
+      }
 
       const currentOp = updatable.originalPrice !== undefined ? updatable.originalPrice : product.originalPrice;
       const currentSp = updatable.sellingPrice !== undefined ? updatable.sellingPrice : product.sellingPrice;
 
       if (currentOp > 0 && currentSp > currentOp) {
         updatable.originalPrice = currentSp;
+        updatable.compareAtPrice = currentSp;
+        updatable.actualPrice = currentSp;
+      }
+      if (currentOp > 0 && currentSp > 0 && currentOp >= currentSp) {
+        updatable.discountPercent = Math.round(((currentOp - currentSp) / currentOp) * 100);
       }
       updatable.updatedBy = req.user?._id;
 
@@ -282,6 +448,19 @@ class AdminController {
           sortOrder: idx
         }));
         await ProductFeature.replaceForProduct(product._id, docs);
+      }
+
+      if (Array.isArray(req.body.files)) {
+        product.files = req.body.files.map((f) => ({
+          name: f.name || f.fileName || '',
+          key: f.key || '',
+          fileName: f.fileName || f.name || '',
+          mimeType: f.mimeType || '',
+          size: f.size || 0,
+          driveUrl: f.driveUrl || '',
+          storageProvider: f.storageProvider || 'r2'
+        }));
+        await product.save();
       }
 
       if (req.logAudit) {
@@ -467,6 +646,54 @@ class AdminController {
     try {
       const orders = await Order.find().sort({ createdAt: -1 }).populate('userId', 'name email').lean();
       return sendSuccess(res, orders, 'Orders list retrieved');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async getOrderStats(req, res, next) {
+    try {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+
+      const successStatuses = ['PAID', 'paid', 'SUCCESS', 'success', 'CAPTURED', 'captured', 'COMPLETED', 'completed'];
+
+      const [todaySuccess, monthSuccess, failed, pending] = await Promise.all([
+        Order.countDocuments({
+          createdAt: { $gte: startOfDay },
+          $or: [
+            { paymentStatus: { $in: successStatuses } },
+            { orderStatus: { $in: ['PAID', 'COMPLETED'] } }
+          ]
+        }),
+        Order.countDocuments({
+          createdAt: { $gte: startOfMonth },
+          $or: [
+            { paymentStatus: { $in: successStatuses } },
+            { orderStatus: { $in: ['PAID', 'COMPLETED'] } }
+          ]
+        }),
+        Order.countDocuments({
+          $or: [
+            { paymentStatus: { $in: ['FAILED', 'failed', 'CANCELLED', 'cancelled'] } },
+            { orderStatus: 'CANCELLED' }
+          ]
+        }),
+        Order.countDocuments({
+          $or: [
+            { paymentStatus: { $in: ['PENDING', 'pending', 'AUTHORIZED', 'authorized'] } },
+            { orderStatus: 'PENDING' }
+          ]
+        })
+      ]);
+
+      return sendSuccess(res, {
+        todaySuccess,
+        monthSuccess,
+        failed,
+        pending
+      }, 'Order statistics retrieved successfully');
     } catch (error) {
       return next(error);
     }
@@ -680,6 +907,87 @@ class AdminController {
         req.logAudit('REVOKE_DOWNLOAD', 'DownloadToken', token._id, { orderId: token.orderId }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
       }
       return sendSuccess(res, token, 'Download link access revoked successfully');
+    } catch (error) {
+      return next(error);
+    }
+  }
+
+  async resendDownloadEmail(req, res, next) {
+    try {
+      const { id } = req.params;
+      const order = await Order.findById(id);
+      if (!order) throw new NotFoundError('Order not found');
+
+      if (order.paymentStatus !== 'SUCCESS') {
+        throw new BadRequestError('Cannot resend download links for a non-paid order');
+      }
+
+      const items = await OrderItem.find({ orderId: order._id });
+      if (!items || items.length === 0) {
+        throw new NotFoundError('No order items found for this order');
+      }
+
+      const downloadService = require('../services/download.service');
+      const deliveryTokens = [];
+
+      for (const item of items) {
+        const rawToken = await downloadService.generateToken(
+          order._id,
+          item._id,
+          order.userId,
+          item.productId,
+          5
+        );
+        const productAccessToken = await downloadService.generateProductAccessToken(
+          order._id,
+          item._id,
+          order.userId,
+          item.productId
+        );
+        deliveryTokens.push({
+          productName: item.productName,
+          tokenValue: rawToken,
+          productAccessToken
+        });
+      }
+
+      let rawInvoiceToken = null;
+      try {
+        const Invoice = require('../models/Invoice');
+        const invoice = await Invoice.findOne({ orderId: order._id });
+        if (invoice) {
+          const crypto = require('crypto');
+          rawInvoiceToken = crypto.randomBytes(32).toString('hex');
+          invoice.accessTokenHash = require('../utils/hash').hashToken(rawInvoiceToken);
+          invoice.tokenExpiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+          await invoice.save();
+        }
+      } catch (invErr) {
+        logger.warn(`Invoice token rotation failed for order ${order.orderNumber}: ${invErr.message}`);
+      }
+
+      const emailResult = await emailService.sendProductEmail(
+        order.customerEmail,
+        order,
+        items,
+        deliveryTokens,
+        rawInvoiceToken
+      );
+
+      if (req.logAudit) {
+        req.logAudit('RESEND_DOWNLOAD_EMAIL', 'Order', order._id, {
+          orderNumber: order.orderNumber,
+          email: order.customerEmail,
+          tokensGenerated: deliveryTokens.length
+        }).catch(err => logger.warn(`Audit log failed: ${err.message}`));
+      }
+
+      return sendSuccess(res, {
+        sent: true,
+        email: order.customerEmail,
+        orderNumber: order.orderNumber,
+        tokensGenerated: deliveryTokens.length
+      }, 'Download links resent successfully');
     } catch (error) {
       return next(error);
     }

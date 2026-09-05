@@ -40,6 +40,7 @@ const changePasswordSchema = zod.object({
 
 router.get('/session', authenticate, authController.getSession);
 router.put('/profile', authenticate, validate({ body: profileSchema }), authController.updateProfile);
+router.get('/mfa/setup', strictLimiter, authenticate, authController.getMfaSetup);
 router.post('/mfa/verify', strictLimiter, authenticate, auditLog, validate({ body: mfaSchema }), authController.verifyAdminMfa);
 router.post('/change-password', strictLimiter, authenticate, auditLog, validate({ body: changePasswordSchema }), authController.changePassword);
 const adminLoginSchema = zod.object({

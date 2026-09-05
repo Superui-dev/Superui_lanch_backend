@@ -28,8 +28,10 @@ async function syncServicesToCategories(services) {
             slug: slug,
             description: s.description || '',
             visible: s.visible !== false,
-            order: s.order || i + 1,
             productType: 'website-template'
+          },
+          $setOnInsert: {
+            order: s.order || i + 1
           }
         },
         { upsert: true, new: true, setDefaultsOnInsert: true }

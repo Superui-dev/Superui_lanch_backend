@@ -10,6 +10,22 @@ const { ProductImage, ProductTechStack, ProductFeature } = require('../models/Pr
 const { NotFoundError } = require('../utils/errors');
 const { sendSuccess } = require('../utils/responses');
 
+let categoryCache = null;
+let categoryCacheTime = 0;
+async function getCachedCategories() {
+  const now = Date.now();
+  if (!categoryCache || (now - categoryCacheTime > 30000)) {
+    try {
+      const cats = await Category.read.find({});
+      categoryCache = cats || [];
+      categoryCacheTime = now;
+    } catch (e) {
+      return categoryCache || [];
+    }
+  }
+  return categoryCache;
+}
+
 async function hydrateProduct(product) {
   if (!product) return product;
   const id = product._id;
@@ -36,6 +52,25 @@ async function hydrateProduct(product) {
     }
   } catch (e) {}
 
+  if (product.categoryId && (!product.categoryId.name || !product.categoryId.slug)) {
+    try {
+      const rawCatId = (typeof product.categoryId === 'object' && product.categoryId._id) ? product.categoryId._id : product.categoryId;
+      const catIdStr = String(rawCatId);
+      const cats = await getCachedCategories();
+      const cat = cats.find(c => String(c._id) === catIdStr || c.slug === catIdStr);
+      if (cat) {
+        product.categoryId = {
+          _id: cat._id,
+          name: cat.name,
+          slug: cat.slug,
+          icon: cat.icon,
+          color: cat.color
+        };
+        product.category = cat.slug;
+      }
+    } catch (e) {}
+  }
+
   if (!product.price && product.sellingPrice) product.price = product.sellingPrice;
   if (!product.compareAtPrice && product.originalPrice) product.compareAtPrice = product.originalPrice;
   if (!product.technologies && product.techStack) {
@@ -48,39 +83,43 @@ class PublicController {
   // Get all visible categories (includes auto-synced service cards)
   async getCategories(req, res, next) {
     try {
-      // Auto-sync DB4 services into Category collection (best-effort, non-blocking)
-      try {
-        const Service = require('../models/Service');
-        await Service.seedDefaultsIfEmpty();
-        const services = await Service.find({ visible: true }).sort({ order: 1 }).lean();
-        if (Array.isArray(services) && services.length > 0) {
-          for (let i = 0; i < services.length; i++) {
-            const s = services[i];
-            if (!s.title) continue;
-            const slug = (s.slug || s.title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w\-]+/g, '')).toLowerCase();
-            try {
-              await Category.findOneAndUpdate(
-                { slug },
-                {
-                  $set: {
-                    name: s.title,
-                    description: s.description || '',
-                    visible: s.visible !== false,
-                    order: s.order || i + 1,
-                    productType: 'website-template'
+      // Auto-sync DB4 services into Category collection in the background without blocking the response
+      setImmediate(async () => {
+        try {
+          const Service = require('../models/Service');
+          await Service.seedDefaultsIfEmpty();
+          const services = await Service.find({ visible: true }).sort({ order: 1 }).lean();
+          if (Array.isArray(services) && services.length > 0) {
+            for (let i = 0; i < services.length; i++) {
+              const s = services[i];
+              if (!s.title) continue;
+              const slug = (s.slug || s.title.toLowerCase().replace(/\s+/g, '-').replace(/[^\w\-]+/g, '')).toLowerCase();
+              try {
+                await Category.findOneAndUpdate(
+                  { slug },
+                  {
+                    $set: {
+                      name: s.title,
+                      description: s.description || '',
+                      visible: s.visible !== false,
+                      productType: 'website-template'
+                    },
+                    $setOnInsert: {
+                      slug,
+                      order: s.order || i + 1
+                    }
                   },
-                  $setOnInsert: { slug }
-                },
-                { upsert: true, new: true, setDefaultsOnInsert: true }
-              );
-            } catch (upsertErr) {
-              // Ignore individual upsert errors (e.g., immutable field conflict)
+                  { upsert: true, new: true, setDefaultsOnInsert: true }
+                );
+              } catch (upsertErr) {
+                // Ignore individual upsert errors
+              }
             }
           }
+        } catch (syncErr) {
+          // Service sync failure should never affect category read
         }
-      } catch (syncErr) {
-        // Service sync failure should never block category fetch
-      }
+      });
 
       const categories = await Category.read.find({ visible: true }, { sort: { order: 1 } });
 
@@ -88,11 +127,17 @@ class PublicController {
       const enriched = await Promise.all((categories || []).map(async (cat) => {
         let productCount = 0;
         try {
-          productCount = await Product.read.countDocuments({ categoryId: cat._id });
+          productCount = await Product.read.countDocuments({
+            categoryId: { $in: [cat._id, String(cat._id)] },
+            status: 'published',
+            isActive: { $ne: false },
+            archivedAt: null
+          });
         } catch (e) { /* ignore count errors, default to 0 */ }
         return { ...cat, productCount };
       }));
 
+      enriched.sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0));
       return sendSuccess(res, enriched, 'Categories fetched successfully');
     } catch (error) {
       return next(error);
@@ -113,12 +158,21 @@ class PublicController {
   async getProducts(req, res, next) {
     try {
       const { category, search, featured, page = 1, limit = 12 } = req.query;
-      const query = { status: 'published' };
+      const query = { status: 'published', isActive: { $ne: false }, archivedAt: null };
 
-      if (category) {
-        const cat = await Category.read.findOne({ slug: category });
+      if (category && category !== 'all') {
+        const cat = await Category.read.findOne({
+          $or: [
+            { slug: category.toLowerCase() },
+            { name: { $regex: new RegExp(`^${category}$`, 'i') } }
+          ]
+        }).catch(() => null);
+
         if (cat) {
-          query.categoryId = cat._id;
+          query.categoryId = { $in: [cat._id, String(cat._id)] };
+        } else if (/^[0-9a-fA-F]{24}$/.test(category)) {
+          const mongoose = require('mongoose');
+          query.categoryId = { $in: [new mongoose.Types.ObjectId(category), category] };
         }
       }
 
@@ -139,7 +193,7 @@ class PublicController {
 
       const allMatching = await Product.read.find(query, { skip: 0, limit: skip + parsedLimit });
       const products = allMatching
-        .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0))
+        .sort((a, b) => (a.order ?? 0) - (b.order ?? 0) || (new Date(b.createdAt || 0) - new Date(a.createdAt || 0)))
         .slice(skip, skip + parsedLimit);
 
       const productsWithStats = await Promise.all(products.map(async (prod) => {

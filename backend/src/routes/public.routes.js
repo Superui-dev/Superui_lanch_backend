@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const publicController = require('../controllers/public.controller');
 const serviceController = require('../controllers/service.controller');
+const upcomingBannerController = require('../controllers/upcomingBanner.controller');
 const invoiceController = require('../controllers/invoice.controller');
 const { publicLimiter, strictLimiter } = require('../middleware/rateLimiter');
 
@@ -16,6 +17,7 @@ router.get('/products/:slug', publicController.getProductBySlug);
 router.get('/products/:productId/reviews', publicController.getProductReviews);
 router.get('/settings', publicController.getSiteSettings);
 router.get('/hero-images', publicController.getHeroImages);
+router.get('/upcoming-banners', upcomingBannerController.getPublicUpcomingBanners);
 
 // Public Invoice Access
 router.get('/invoice/:token', invoiceController.getInvoiceByToken);

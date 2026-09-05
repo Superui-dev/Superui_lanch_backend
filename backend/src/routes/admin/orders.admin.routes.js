@@ -4,6 +4,7 @@ const adminController = require('../../controllers/admin.controller');
 const invoiceController = require('../../controllers/invoice.controller');
 
 router.get('/', adminController.getOrders.bind(adminController));
+router.get('/stats', adminController.getOrderStats.bind(adminController));
 router.put('/:id/cancel', adminController.cancelOrder.bind(adminController));
 
 // Admin Invoice endpoints

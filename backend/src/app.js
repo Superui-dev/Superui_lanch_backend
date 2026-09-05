@@ -113,6 +113,7 @@ adminRouter.use('/settings', require('./routes/admin/settings.admin.routes'));
 adminRouter.use('/security', require('./routes/admin/security.admin.routes'));
 adminRouter.use('/health', require('./routes/admin/health.admin.routes'));
 adminRouter.use('/hero-images', require('./routes/admin/hero.admin.routes'));
+adminRouter.use('/upcoming-banners', require('./routes/admin/upcomingBanners.admin.routes'));
 adminRouter.use('/services', require('./routes/admin/service.admin.routes'));
 
 app.use('/api/admin', adminRouter);

@@ -10,9 +10,12 @@ const imageSchema = new mongoose.Schema({
 
 const fileSchema = new mongoose.Schema({
   name: { type: String, required: true },
-  driveUrl: { type: String, required: true },
+  key: { type: String },
+  fileName: { type: String },
+  mimeType: { type: String },
   size: { type: Number },
-  mimeType: { type: String }
+  driveUrl: { type: String },
+  storageProvider: { type: String, enum: ['r2', 'drive'], default: 'r2' }
 }, { _id: false });
 
 const techStackItemSchema = new mongoose.Schema({
@@ -79,6 +82,7 @@ const productSchema = new mongoose.Schema({
     default: 'template'
   },
   isActive: { type: Boolean, default: true },
+  order: { type: Number, default: 0, index: true },
   categoryId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Category',

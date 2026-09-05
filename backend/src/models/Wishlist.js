@@ -16,4 +16,6 @@ const wishlistSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('Wishlist', wishlistSchema);
+const { getCommerceConnection } = require('../config/db');
+
+module.exports = getCommerceConnection().model('Wishlist', wishlistSchema);
